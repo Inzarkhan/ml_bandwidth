@@ -1,105 +1,120 @@
 #!/usr/bin/env python3
-import json
+import os, json
 import numpy as np
-import joblib
-from pathlib import Path
+from joblib import dump
 from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 
-# ---------------------------------------------------
-# USER SETTINGS (EDIT HERE)
-# ---------------------------------------------------
+DATA_DIR = "dataset_reg"
+MODEL_DIR = "models"
 
-DATA_DIR = "dataset_reg"   # output of build_dataset_regression.py
-OUT_DIR  = "models"        # where to save joblib models + metrics
-MAX_ITER = 300             # training iterations
-RANDOM_STATE = 42
+LOG_MIN = np.log1p(0.0)
+LOG_MAX = np.log1p(60000.0)  # 60s cap
 
-# Optional tuning knobs (set to None to use defaults)
-LEARNING_RATE = 0.08
-MAX_DEPTH = None           # e.g. 6, 10, None
+def rmse(y_true, y_pred):
+    return float(np.sqrt(mean_squared_error(y_true, y_pred)))
 
-# ---------------------------------------------------
-# METRICS
-# ---------------------------------------------------
+def metrics(y_true, y_pred):
+    return {"mae": float(mean_absolute_error(y_true, y_pred)),
+            "rmse": rmse(y_true, y_pred)}
 
-def evaluate(y_true, y_pred):
-    mae = float(mean_absolute_error(y_true, y_pred))
-    rmse = float(np.sqrt(mean_squared_error(y_true, y_pred)))
-    return {"mae": mae, "rmse": rmse}
+def fit_log_model(X_train, y_ms_train):
+    y_t = np.log1p(y_ms_train)
+    model = HistGradientBoostingRegressor(
+        loss="squared_error",
+        learning_rate=0.03,
+        max_depth=8,
+        max_iter=1200,
+        random_state=42,
+    )
+    model.fit(X_train, y_t)
+    return model
 
-# ---------------------------------------------------
-# MAIN
-# ---------------------------------------------------
+def predict_ms(model, X):
+    pred_t = model.predict(X)
+    pred_t = np.clip(pred_t, LOG_MIN, LOG_MAX)
+    return np.expm1(pred_t)
 
 def main():
-    data_dir = Path(DATA_DIR)
-    outdir = Path(OUT_DIR)
-    outdir.mkdir(parents=True, exist_ok=True)
+    os.makedirs(MODEL_DIR, exist_ok=True)
 
-    # Load arrays
-    X_train = np.load(data_dir / "X_train.npy")
-    X_test  = np.load(data_dir / "X_test.npy")
+    X_train = np.load(os.path.join(DATA_DIR, "X_train.npy"))
+    X_test  = np.load(os.path.join(DATA_DIR, "X_test.npy"))
+    yL_train = np.load(os.path.join(DATA_DIR, "y_latency_train.npy"))
+    yL_test  = np.load(os.path.join(DATA_DIR, "y_latency_test.npy"))
+    yE_train = np.load(os.path.join(DATA_DIR, "y_energy_train.npy"))
+    yE_test  = np.load(os.path.join(DATA_DIR, "y_energy_test.npy"))
 
-    yL_train = np.load(data_dir / "y_latency_train.npy")
-    yL_test  = np.load(data_dir / "y_latency_test.npy")
+    # We need cold_start column index from meta.json features
+    meta = json.load(open(os.path.join(DATA_DIR, "meta.json")))
+    feats = meta["features"]
+    if "cold_start" not in feats:
+        raise ValueError("cold_start not found in features. Check dataset_reg/meta.json")
+    cold_i = feats.index("cold_start")
 
-    yE_train = np.load(data_dir / "y_energy_train.npy")
-    yE_test  = np.load(data_dir / "y_energy_test.npy")
+    # Masks
+    cold_train = X_train[:, cold_i] == 1
+    warm_train = ~cold_train
+    cold_test = X_test[:, cold_i] == 1
+    warm_test = ~cold_test
 
-    # Models: 2 regressors
-    latency_model = HistGradientBoostingRegressor(
-        max_iter=MAX_ITER,
-        learning_rate=LEARNING_RATE,
-        max_depth=MAX_DEPTH,
-        random_state=RANDOM_STATE
-    )
-
-    energy_model = HistGradientBoostingRegressor(
-        max_iter=MAX_ITER,
-        learning_rate=LEARNING_RATE,
-        max_depth=MAX_DEPTH,
-        random_state=RANDOM_STATE + 1
-    )
-
-    # Train
-    latency_model.fit(X_train, yL_train)
-    energy_model.fit(X_train, yE_train)
+    # ---- Train two latency models ----
+    m_cold = fit_log_model(X_train[cold_train], yL_train[cold_train])
+    m_warm = fit_log_model(X_train[warm_train], yL_train[warm_train])
 
     # Predict
-    yL_pred = latency_model.predict(X_test)
-    yE_pred = energy_model.predict(X_test)
+    pred_cold = predict_ms(m_cold, X_test[cold_test]) if cold_test.any() else np.array([])
+    pred_warm = predict_ms(m_warm, X_test[warm_test]) if warm_test.any() else np.array([])
 
-    # Evaluate
-    results = {
-        "latency": evaluate(yL_test, yL_pred),
-        "energy": evaluate(yE_test, yE_pred),
-        "config": {
-            "max_iter": MAX_ITER,
-            "learning_rate": LEARNING_RATE,
-            "max_depth": MAX_DEPTH,
-            "random_state": RANDOM_STATE
-        },
-        "shapes": {
-            "X_train": list(X_train.shape),
-            "X_test": list(X_test.shape)
-        }
-    }
+    # Combine into one array aligned with X_test order
+    y_pred_all = np.empty_like(yL_test, dtype=float)
+    if cold_test.any():
+        y_pred_all[cold_test] = pred_cold
+    if warm_test.any():
+        y_pred_all[warm_test] = pred_warm
+
+    # Metrics
+    overall = metrics(yL_test, y_pred_all)
+    cold_m = metrics(yL_test[cold_test], y_pred_all[cold_test]) if cold_test.any() else None
+    warm_m = metrics(yL_test[warm_test], y_pred_all[warm_test]) if warm_test.any() else None
+
+    # ---- Energy model (still placeholder) ----
+    energy_model = HistGradientBoostingRegressor(
+        loss="squared_error",
+        learning_rate=0.05,
+        max_depth=8,
+        max_iter=400,
+        random_state=42,
+    )
+    energy_model.fit(X_train, yE_train)
+    yE_pred = energy_model.predict(X_test)
+    energy_m = metrics(yE_test, yE_pred)
 
     print("\n==== Evaluation Results ====")
-    print("Latency  MAE/RMSE:", results["latency"])
-    print("Energy   MAE/RMSE:", results["energy"])
+    print("Latency OVERALL MAE/RMSE:", overall)
+    print("Latency COLD    MAE/RMSE:", cold_m)
+    print("Latency WARM    MAE/RMSE:", warm_m)
+    print("Energy          MAE/RMSE:", energy_m)
 
     # Save models
-    joblib.dump(latency_model, outdir / "latency_model.joblib")
-    joblib.dump(energy_model, outdir / "energy_model.joblib")
+    dump(m_cold, os.path.join(MODEL_DIR, "latency_cold_hgbdt.joblib"))
+    dump(m_warm, os.path.join(MODEL_DIR, "latency_warm_hgbdt.joblib"))
+    dump(energy_model, os.path.join(MODEL_DIR, "energy_hgbdt.joblib"))
 
-    # Save metrics as json
-    (outdir / "metrics.json").write_text(json.dumps(results, indent=2), encoding="utf-8")
+    out = {
+        "latency_overall": overall,
+        "latency_cold": cold_m,
+        "latency_warm": warm_m,
+        "energy": energy_m,
+        "latency_target": "log1p(duration_ms) with cold/warm split",
+        "prediction_postprocess": f"clip log to [{float(LOG_MIN):.3f},{float(LOG_MAX):.3f}] then expm1",
+        "features": feats,
+    }
+    with open(os.path.join(MODEL_DIR, "metrics.json"), "w") as f:
+        json.dump(out, f, indent=2)
 
-    print("\n[OK] Models saved to:", outdir.resolve())
-    print("[OK] Metrics saved to:", (outdir / "metrics.json").resolve())
-
+    print(f"\n[OK] Models saved to: {os.path.abspath(MODEL_DIR)}")
+    print(f"[OK] Metrics saved to: {os.path.abspath(os.path.join(MODEL_DIR,'metrics.json'))}")
 
 if __name__ == "__main__":
     main()

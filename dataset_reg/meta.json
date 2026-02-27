@@ -1,0 +1,54 @@
+{
+  "input_csv": "/home/said/Pictures/Paper_Conference/Paper_Micro/prepared.csv",
+  "n_rows": 1500,
+  "n_train": 1200,
+  "n_test": 300,
+  "features": [
+    "mem_limit_mb",
+    "cold_start",
+    "concurrency",
+    "queue_delay_ms",
+    "cpu_time_ms",
+    "peak_rss_mb",
+    "rss_mb",
+    "io_read_bytes",
+    "io_write_bytes",
+    "rss_ratio",
+    "cpu_per_mem",
+    "log_mem",
+    "workload__cpuintensive",
+    "workload__memory_touch",
+    "workload__mixed_touch_cpu"
+  ],
+  "base_features": [
+    "mem_limit_mb",
+    "cold_start",
+    "concurrency",
+    "queue_delay_ms",
+    "cpu_time_ms",
+    "peak_rss_mb",
+    "rss_mb",
+    "io_read_bytes",
+    "io_write_bytes"
+  ],
+  "engineered_features": [
+    "rss_ratio",
+    "cpu_per_mem",
+    "log_mem"
+  ],
+  "workload_onehot_columns": [
+    "workload__cpuintensive",
+    "workload__memory_touch",
+    "workload__mixed_touch_cpu"
+  ],
+  "target_latency": "duration_ms",
+  "target_energy": "energy_joules",
+  "group_col": "run_id",
+  "workload_col": "workload",
+  "unique_groups": 60,
+  "unique_workloads": [
+    "cpuintensive",
+    "memory_touch",
+    "mixed_touch_cpu"
+  ]
+}

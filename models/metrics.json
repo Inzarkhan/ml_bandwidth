@@ -1,0 +1,37 @@
+{
+  "latency_overall": {
+    "mae": 5.777649662541465,
+    "rmse": 19.7132666217786
+  },
+  "latency_cold": {
+    "mae": 8.192930702652701,
+    "rmse": 19.078395545082564
+  },
+  "latency_warm": {
+    "mae": 5.1738294025136575,
+    "rmse": 19.868814936553367
+  },
+  "energy": {
+    "mae": 0.0,
+    "rmse": 0.0
+  },
+  "latency_target": "log1p(duration_ms) with cold/warm split",
+  "prediction_postprocess": "clip log to [0.000,11.002] then expm1",
+  "features": [
+    "mem_limit_mb",
+    "cold_start",
+    "concurrency",
+    "queue_delay_ms",
+    "cpu_time_ms",
+    "peak_rss_mb",
+    "rss_mb",
+    "io_read_bytes",
+    "io_write_bytes",
+    "rss_ratio",
+    "cpu_per_mem",
+    "log_mem",
+    "workload__cpuintensive",
+    "workload__memory_touch",
+    "workload__mixed_touch_cpu"
+  ]
+}
