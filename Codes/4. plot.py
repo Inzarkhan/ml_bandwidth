@@ -13,13 +13,13 @@ def main():
     # Global paper-style font settings
     plt.rcParams.update({
         "font.family": "serif",
-        "font.size": 16,
-        "axes.titlesize": 18,
-        "axes.labelsize": 18,
-        "xtick.labelsize": 17,
-        "ytick.labelsize": 17,
-        "legend.fontsize": 16,
-        "legend.title_fontsize": 17
+        "font.size": 18,
+        "axes.titlesize": 20,
+        "axes.labelsize": 20,
+        "xtick.labelsize": 18,
+        "ytick.labelsize": 18,
+        "legend.fontsize": 18,
+        "legend.title_fontsize": 18
     })
 
     # 1. Load Data
@@ -66,11 +66,11 @@ def main():
         label="Perfect Prediction"
     )
 
-    ax1.set_title(f"Energy Prediction Accuracy (R² = {r2:.3f})")
-    ax1.set_xlabel("Actual Energy (Joules)")
-    ax1.set_ylabel("Predicted Energy (Joules)")
-    ax1.tick_params(axis="both", labelsize=17)
-    ax1.legend(frameon=True)
+    ax1.set_title(f"Energy Prediction Accuracy (R² = {r2:.3f})", fontsize=22, pad=12)
+    ax1.set_xlabel("Actual Energy (Joules)", fontsize=21, labelpad=8)
+    ax1.set_ylabel("Predicted Energy (Joules)", fontsize=21, labelpad=8)
+    ax1.tick_params(axis="both", labelsize=18)
+    ax1.legend(frameon=True, fontsize=18)
     ax1.grid(False)
 
     plt.tight_layout()
@@ -94,8 +94,7 @@ def main():
 
     sorted_idx = result.importances_mean.argsort()
 
-    # Larger width + height for long feature names
-    fig2, ax2 = plt.subplots(figsize=(16, 10))  # Bigger overall plot
+    fig2, ax2 = plt.subplots(figsize=(16, 10))
 
     bp = ax2.boxplot(
         result.importances[sorted_idx].T,
@@ -105,7 +104,6 @@ def main():
         widths=0.75
     )
 
-    # Stronger styling
     for box in bp["boxes"]:
         box.set(facecolor="#DDDDDD", edgecolor="black", linewidth=7.6)
 
@@ -127,25 +125,24 @@ def main():
 
     ax2.set_title(
         "Feature Importance for Energy Consumption",
-        fontsize=22,
+        fontsize=26,
         pad=14
     )
 
     ax2.set_xlabel(
         "Permutation Importance (Decrease in Accuracy)",
-        fontsize=20,
+        fontsize=24,
         labelpad=10
     )
 
     ax2.set_ylabel(
         "Features",
-        fontsize=20,
+        fontsize=24,
         labelpad=12
     )
 
-    # 🔥 Increase feature (y-axis) label size
-    ax2.tick_params(axis="x", labelsize=19)
-    ax2.tick_params(axis="y", labelsize=19)
+    ax2.tick_params(axis="x", labelsize=22)
+    ax2.tick_params(axis="y", labelsize=22)
 
     ax2.grid(False)
 

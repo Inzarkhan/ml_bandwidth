@@ -4,8 +4,10 @@ import numpy as np
 import pandas as pd
 from sklearn.model_selection import GroupShuffleSplit, train_test_split
 
-INPUT_CSV = "prepared.csv"
-OUT_DIR = "dataset_reg"
+INPUT_CSV = os.environ.get("DATASET_INPUT_CSV", "prepared.csv")
+OUT_DIR = os.environ.get("DATASET_OUT_DIR", "dataset_reg")
+WORKLOAD_COL = "workload"
+GROUP_COL = WORKLOAD_COL
 
 # Features expected in the CSV
 BASE_FEATURES = [
@@ -19,11 +21,55 @@ BASE_FEATURES = [
     "io_read_bytes",
     "io_write_bytes",
 ]
+OPTIONAL_NUMERIC_FEATURES = [
+    "omp_threads",
+    "cpu_limit",
+    "target_seconds",
+    "target_iterations",
+    "elapsed_seconds",
+    "iterations_completed",
+    "command_runs",
+    "idle_gap_ms",
+    "launch_overhead_ms",
+    "cpu_user_time_ms",
+    "cpu_system_time_ms",
+    "cpu_util_pct",
+    "cpu_nr_periods",
+    "cpu_nr_throttled",
+    "cpu_throttled_ms",
+    "cpu_throttled_pct",
+    "memory_current_mb",
+    "memory_peak_mb",
+    "memory_avg_mb",
+    "memory_util_pct",
+    "memory_peak_util_pct",
+    "memory_avg_util_pct",
+    "memory_max_events",
+    "memory_high_events",
+    "memory_oom_events",
+    "memory_oom_kill_events",
+    "cpu_pressure_some_avg10",
+    "cpu_pressure_full_avg10",
+    "memory_pressure_some_avg10",
+    "memory_pressure_full_avg10",
+    "queue_length",
+    "queue_signal_available",
+    "monitor_sample_count",
+    "service_time_ms",
+    "throughput_ops_per_s",
+    "window_index",
+    "window_start_ms",
+    "window_end_ms",
+]
+OPTIONAL_CATEGORICAL_FEATURES = [
+    "suite",
+    "workload_type",
+    "input_profile",
+    "work_mode",
+]
 
 TARGET_LATENCY = "duration_ms"
 TARGET_ENERGY = "energy_joules"
-GROUP_COL = "run_id"
-WORKLOAD_COL = "workload"
 
 def main():
     df = pd.read_csv(INPUT_CSV)
@@ -48,6 +94,7 @@ def main():
 
     # 3. Convert ONLY strictly numeric columns (exclude cold_start which is already fixed)
     numeric_cols = [c for c in BASE_FEATURES if c != "cold_start"] + [TARGET_LATENCY, TARGET_ENERGY]
+    numeric_cols += [c for c in OPTIONAL_NUMERIC_FEATURES if c in df.columns]
     
     for c in numeric_cols:
         df[c] = pd.to_numeric(df[c], errors="coerce")
@@ -72,21 +119,57 @@ def main():
     # ---- Feature Engineering ----
     eps = 1e-9
     df["cold_start"] = df["cold_start"].astype(int)
-    df["rss_ratio"] = df["peak_rss_mb"] / (df["mem_limit_mb"] + eps)
-    df["cpu_per_mem"] = df["cpu_time_ms"] / (df["mem_limit_mb"] + eps)
-    df["log_mem"] = np.log1p(df["mem_limit_mb"].astype(float))
+    elapsed_seconds = pd.to_numeric(df.get("elapsed_seconds", 0.0), errors="coerce").fillna(0.0)
+    iterations_completed = pd.to_numeric(df.get("iterations_completed", 0.0), errors="coerce").fillna(0.0)
 
-    # One-hot encode workload
-    workload_dummies = pd.get_dummies(df[WORKLOAD_COL].astype(str), prefix="workload", prefix_sep="__")
+    df["rss_ratio"] = df["peak_rss_mb"] / (df["mem_limit_mb"] + eps)
+    df["current_rss_ratio"] = df["rss_mb"] / (df["mem_limit_mb"] + eps)
+    df["cpu_per_mem"] = df["cpu_time_ms"] / (df["mem_limit_mb"] + eps)
+    df["cpu_util_fraction"] = pd.to_numeric(df.get("cpu_util_pct", 0.0), errors="coerce").fillna(0.0) / 100.0
+    df["memory_headroom_pct"] = 100.0 - pd.to_numeric(df.get("memory_peak_util_pct", 0.0), errors="coerce").fillna(0.0)
+    df["throttle_fraction"] = pd.to_numeric(df.get("cpu_throttled_pct", 0.0), errors="coerce").fillna(0.0) / 100.0
+    safe_iterations = iterations_completed.where(iterations_completed > 0, np.nan)
+    safe_elapsed = elapsed_seconds.where(elapsed_seconds > 0, np.nan)
+    df["service_time_ms"] = ((elapsed_seconds * 1000.0) / safe_iterations).fillna(df[TARGET_LATENCY])
+    df["throughput_ops_per_s"] = (iterations_completed / safe_elapsed).fillna(0.0)
+    df["log_mem"] = np.log1p(df["mem_limit_mb"].astype(float))
+    df["progress_ratio"] = (
+        pd.to_numeric(df.get("window_end_ms", 0.0), errors="coerce").fillna(0.0)
+        / np.maximum((elapsed_seconds * 1000.0).replace(0.0, np.nan), 1.0)
+    ).replace([np.inf, -np.inf], np.nan).fillna(0.0).clip(lower=0.0, upper=1.0)
+    df["is_fixed_work"] = (pd.to_numeric(df.get("target_iterations", 0.0), errors="coerce").fillna(0.0) > 0).astype(float)
     
     # Build final feature set
     feature_df = df[BASE_FEATURES].copy()
     feature_df["rss_ratio"] = df["rss_ratio"]
+    feature_df["current_rss_ratio"] = df["current_rss_ratio"]
     feature_df["cpu_per_mem"] = df["cpu_per_mem"]
+    feature_df["cpu_util_fraction"] = df["cpu_util_fraction"]
+    feature_df["memory_headroom_pct"] = df["memory_headroom_pct"]
+    feature_df["throttle_fraction"] = df["throttle_fraction"]
+    feature_df["service_time_ms"] = df["service_time_ms"]
+    feature_df["throughput_ops_per_s"] = df["throughput_ops_per_s"]
     feature_df["log_mem"] = df["log_mem"]
+    feature_df["progress_ratio"] = df["progress_ratio"]
+    feature_df["is_fixed_work"] = df["is_fixed_work"]
+
+    for col in OPTIONAL_NUMERIC_FEATURES:
+        if col not in df.columns:
+            continue
+        series = pd.to_numeric(df[col], errors="coerce")
+        if series.isna().all():
+            continue
+        feature_df[col] = series.fillna(series.median())
     
-    workload_dummies = workload_dummies.reindex(sorted(workload_dummies.columns), axis=1)
-    feature_df = pd.concat([feature_df, workload_dummies], axis=1)
+    for col in OPTIONAL_CATEGORICAL_FEATURES:
+        if col not in df.columns:
+            continue
+        valid = df[col].replace({"nan": np.nan}).dropna()
+        if valid.empty:
+            continue
+        dummies = pd.get_dummies(df[col].astype(str), prefix=col, prefix_sep="__")
+        dummies = dummies.reindex(sorted(dummies.columns), axis=1)
+        feature_df = pd.concat([feature_df, dummies], axis=1)
 
     FEATURES = feature_df.columns.tolist()
 
@@ -124,7 +207,7 @@ def main():
         "features": FEATURES,
         "n_train": int(len(train_idx)),
         "n_test": int(len(test_idx)),
-        "workload_onehot": workload_dummies.columns.tolist()
+        "workload_onehot": []
     }
     with open(os.path.join(OUT_DIR, "meta.json"), "w") as f:
         json.dump(meta, f, indent=2)

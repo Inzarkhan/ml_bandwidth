@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 import json
 import csv
+import os
 from pathlib import Path
 
 # ----------------------------
 # USER SETTINGS (EDIT HERE)
 # ----------------------------
 
-# Option A: Process a single file (recommended for your case)
+# Option A: Process the known benchmark files used for training
 INPUT_FILES = [
-    "mixed.json"
+    "raw_sebs_known.jsonl",
 ]
 
 # Option B: Process multiple files (uncomment and list them)
@@ -33,6 +34,64 @@ REQUIRED_KEYS = [
     "mem_limit_mb", "cold_start", "concurrency", "queue_delay_ms",
     "duration_ms", "cpu_time_ms", "rss_mb", "peak_rss_mb",
     "io_read_bytes", "io_write_bytes", "energy_joules"
+]
+
+OPTIONAL_KEYS = [
+    "display_name",
+    "suite",
+    "workload_type",
+    "partition",
+    "resource_profile",
+    "resource_profile_index",
+    "resource_profile_label",
+    "plot_workload_name",
+    "omp_threads",
+    "benchmark_name",
+    "input_profile",
+    "package_name",
+    "build_config",
+    "target_seconds",
+    "target_iterations",
+    "work_mode",
+    "elapsed_seconds",
+    "iterations_completed",
+    "command_runs",
+    "cpu_limit",
+    "idle_gap_ms",
+    "run_index",
+    "launch_overhead_ms",
+    "cpu_user_time_ms",
+    "cpu_system_time_ms",
+    "cpu_util_pct",
+    "cpu_nr_periods",
+    "cpu_nr_throttled",
+    "cpu_throttled_ms",
+    "cpu_throttled_pct",
+    "memory_current_mb",
+    "memory_peak_mb",
+    "memory_avg_mb",
+    "memory_util_pct",
+    "memory_peak_util_pct",
+    "memory_avg_util_pct",
+    "memory_max_events",
+    "memory_high_events",
+    "memory_oom_events",
+    "memory_oom_kill_events",
+    "cpu_pressure_some_avg10",
+    "cpu_pressure_full_avg10",
+    "memory_pressure_some_avg10",
+    "memory_pressure_full_avg10",
+    "queue_length",
+    "queue_signal_available",
+    "monitor_sample_count",
+    "instrumentation_mode",
+    "rapl_wrapped",
+    "window_index",
+    "window_start_ms",
+    "window_end_ms",
+    "sample_kind",
+    "service_time_ms",
+    "throughput_ops_per_s",
 ]
 
 
@@ -84,8 +143,14 @@ def collect_files():
         return sorted(files)
 
     # File list mode
+    raw_env_input = os.environ.get("PREPARE_INPUT_FILES")
+    if raw_env_input:
+        input_files = [item.strip() for item in raw_env_input.split(",") if item.strip()]
+    else:
+        input_files = INPUT_FILES
+
     files = []
-    for name in INPUT_FILES:
+    for name in input_files:
         p = Path(name)
         if not p.exists():
             raise FileNotFoundError(f"Input file not found: {p.resolve()}")
@@ -94,7 +159,8 @@ def collect_files():
 
 
 def main():
-    out_path = Path(OUTPUT_CSV)
+    output_csv = os.environ.get("PREPARE_OUTPUT_CSV", OUTPUT_CSV)
+    out_path = Path(output_csv)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     files = collect_files()
@@ -107,12 +173,13 @@ def main():
 
     rows_written = 0
     with out_path.open("w", newline="", encoding="utf-8") as csvfile:
-        writer = csv.DictWriter(csvfile, fieldnames=REQUIRED_KEYS)
+        fieldnames = REQUIRED_KEYS + OPTIONAL_KEYS
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
 
         for file in files:
             for rec in read_json_records(file):
-                row = {k: rec.get(k, None) for k in REQUIRED_KEYS}
+                row = {k: rec.get(k, None) for k in fieldnames}
                 writer.writerow(row)
                 rows_written += 1
 

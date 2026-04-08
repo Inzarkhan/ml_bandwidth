@@ -44,13 +44,13 @@ hatch_map = {
 
 plt.rcParams.update({
     "font.family": "serif",
-    "font.size": 16,
-    "axes.titlesize": 18,
-    "axes.labelsize": 18,
-    "xtick.labelsize": 17,
-    "ytick.labelsize": 17,
-    "legend.fontsize": 16,
-    "legend.title_fontsize": 17
+    "font.size": 18,
+    "axes.titlesize": 20,
+    "axes.labelsize": 20,
+    "xtick.labelsize": 18,
+    "ytick.labelsize": 18,
+    "legend.fontsize": 18,
+    "legend.title_fontsize": 18
 })
 
 fig, axes = plt.subplots(1, 3, figsize=(22, 6.8))
@@ -103,7 +103,7 @@ for ax, (metric, title, ylabel), panel in zip(
     ax.set_ylabel(ylabel)
     ax.set_xticks(x)
     ax.set_xticklabels(workload_order, rotation=15, ha="right")
-    ax.tick_params(axis="both", labelsize=17)
+    ax.tick_params(axis="both", labelsize=18)
 
     ax.text(
         0.02, 0.98, panel,
@@ -136,8 +136,8 @@ axes[2].legend(
     title="Memory Limit",
     loc="upper right",
     frameon=True,
-    fontsize=16,
-    title_fontsize=17
+    fontsize=18,
+    title_fontsize=18
 )
 
 plt.tight_layout()

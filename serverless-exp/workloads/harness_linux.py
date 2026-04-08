@@ -1,5 +1,7 @@
 import argparse, json, os, subprocess, time, uuid, re
 
+WORKLOADS_DIR = os.path.dirname(os.path.abspath(__file__))
+
 def get_rapl_energy_mj():
     rapl_path = "/sys/devices/virtual/powercap/intel-rapl/intel-rapl:0/energy_uj"
     try:
@@ -57,7 +59,7 @@ def run_once(workload_cmd, meta):
     if e_start is not None and e_end is not None and e_end > e_start:
          energy_joules = (e_end - e_start) / 1e6
     
-    return {
+    result = {
         "platform": meta.get("platform", "docker_local"),
         "workload": meta.get("workload", "unknown"),
         "run_id": meta.get("run_id", "unknown"),
@@ -74,6 +76,10 @@ def run_once(workload_cmd, meta):
         "io_write_bytes": stats.get("io_write_blocks", 0) * 512,
         "energy_joules": energy_joules
     }
+    for optional_key in ("display_name", "suite", "workload_type", "partition"):
+        if meta.get(optional_key) is not None:
+            result[optional_key] = meta[optional_key]
+    return result
 
 def main():
     ap = argparse.ArgumentParser()
@@ -82,10 +88,21 @@ def main():
     ap.add_argument("--runs", type=int, default=1)
     ap.add_argument("--cold_every", type=int, default=1)
     ap.add_argument("--log", default="/logs/raw.jsonl")
+    ap.add_argument("--workload_event_json", default="")
+    ap.add_argument("--display_name", default=None)
+    ap.add_argument("--suite", default=None)
+    ap.add_argument("--workload_type", default=None)
+    ap.add_argument("--partition", default=None)
     args = ap.parse_args()
 
     os.makedirs(os.path.dirname(args.log), exist_ok=True)
-    cmd = ["python3", f"/app/workloads/{args.workload}.py"]
+    workload_script = os.path.join(WORKLOADS_DIR, f"{args.workload}.py")
+    if not os.path.exists(workload_script):
+        raise FileNotFoundError(f"Workload script not found: {workload_script}")
+
+    cmd = ["python3", workload_script]
+    if args.workload_event_json:
+        cmd.append(args.workload_event_json)
     run_id = str(uuid.uuid4())
 
     print(f"Starting {args.runs} runs of {args.workload}...")
@@ -97,7 +114,11 @@ def main():
                 "workload": args.workload,
                 "run_id": run_id,
                 "mem_limit_mb": args.mem_limit_mb,
-                "cold_start": (i % args.cold_every == 0)
+                "cold_start": (i % args.cold_every == 0),
+                "display_name": args.display_name,
+                "suite": args.suite,
+                "workload_type": args.workload_type,
+                "partition": args.partition,
             }
             res = run_once(cmd, meta)
             f.write(json.dumps(res) + "\n")
