@@ -1,0 +1,182 @@
+{
+  "model_file": "energy_hgbdt_decision.joblib",
+  "classifier_model_file": "energy_hgbdt_decision_classifier.joblib",
+  "target": "energy_delta_vs_1024_joules",
+  "description": "Resource-aware decision-time energy delta model trained on repeated-run baseline-to-target projections. Features come from the default baseline telemetry projected onto the candidate action, and the target is the observed aggregated run-level energy delta versus the default baseline. An auxiliary classifier predicts whether a candidate action is beneficial and SLO-safe.",
+  "features": [
+    "mem_limit_mb",
+    "cold_start",
+    "log_mem",
+    "queue_delay_ms",
+    "cpu_time_ms",
+    "cpu_user_time_ms",
+    "cpu_system_time_ms",
+    "cpu_util_pct",
+    "cpu_nr_periods",
+    "cpu_nr_throttled",
+    "cpu_throttled_ms",
+    "cpu_throttled_pct",
+    "peak_rss_mb",
+    "rss_mb",
+    "memory_current_mb",
+    "memory_peak_mb",
+    "memory_avg_mb",
+    "memory_util_pct",
+    "memory_peak_util_pct",
+    "memory_avg_util_pct",
+    "memory_max_events",
+    "memory_high_events",
+    "memory_oom_events",
+    "memory_oom_kill_events",
+    "cpu_pressure_some_avg10",
+    "cpu_pressure_full_avg10",
+    "memory_pressure_some_avg10",
+    "memory_pressure_full_avg10",
+    "io_read_bytes",
+    "io_write_bytes",
+    "omp_threads",
+    "cpu_limit",
+    "target_seconds",
+    "target_iterations",
+    "elapsed_seconds",
+    "iterations_completed",
+    "command_runs",
+    "idle_gap_ms",
+    "launch_overhead_ms",
+    "queue_length",
+    "queue_signal_available",
+    "baseline_energy_1024_joules",
+    "projected_slowdown_factor",
+    "service_time_ms",
+    "throughput_ops_per_s",
+    "window_index",
+    "window_start_ms",
+    "window_end_ms",
+    "rss_ratio",
+    "current_rss_ratio",
+    "cpu_per_mem",
+    "cpu_util_fraction",
+    "memory_headroom_pct",
+    "under_18_cpu_util",
+    "low_queue_signal",
+    "progress_ratio",
+    "is_fixed_work",
+    "latency_pressure_flag",
+    "suite__FunctionBench",
+    "suite__SeBS",
+    "workload_type__multimedia",
+    "workload_type__scientific",
+    "workload_type__utility",
+    "workload_type__web",
+    "input_profile__large",
+    "input_profile__small",
+    "work_mode__fixed_duration"
+  ],
+  "workload_type_map": {
+    "sebs_video_processing_known": "multimedia",
+    "sebs_dna_visualisation_known": "scientific",
+    "sebs_graph_bfs_known": "scientific",
+    "sebs_graph_mst_known": "scientific",
+    "sebs_compression_known": "utility",
+    "functionbench_download_upload_known": "web",
+    "sebs_crud_api_known": "web",
+    "sebs_dynamic_html_known": "web",
+    "sebs_uploader_known": "web"
+  },
+  "workload_baseline_mem_mb": 1024,
+  "workload_baseline_cpu_limit": 1.0,
+  "workload_baseline_map": {
+    "functionbench_download_upload_known": 1312.7055625000003,
+    "sebs_compression_known": 1785.553229,
+    "sebs_crud_api_known": 1879.4788005,
+    "sebs_dna_visualisation_known": 1820.3581935,
+    "sebs_dynamic_html_known": 1703.180149,
+    "sebs_graph_bfs_known": 1700.260479,
+    "sebs_graph_mst_known": 1699.2479994999999,
+    "sebs_uploader_known": 1729.630887,
+    "sebs_video_processing_known": 1740.854155
+  },
+  "group_column": "workload",
+  "repeat_aggregation_mode": "median",
+  "beneficial_min_savings_pct": 0.5,
+  "beneficial_probability_threshold": 0.6,
+  "decision_slo_multiplier": 1.4,
+  "n_train": 28,
+  "n_test": 8,
+  "selected_params": {
+    "learning_rate": 0.03,
+    "max_depth": 6,
+    "max_iter": 1000,
+    "min_samples_leaf": 10,
+    "l2_regularization": 0.1
+  },
+  "validation_metrics": {
+    "mae": 27.99005614365369,
+    "rmse": 32.57784048139814
+  },
+  "search_results": [
+    {
+      "params": {
+        "learning_rate": 0.05,
+        "max_depth": 4,
+        "max_iter": 300,
+        "min_samples_leaf": 5,
+        "l2_regularization": 0.0
+      },
+      "metrics": {
+        "mae": 30.118403467258183,
+        "rmse": 39.22841090962349
+      }
+    },
+    {
+      "params": {
+        "learning_rate": 0.05,
+        "max_depth": 6,
+        "max_iter": 400,
+        "min_samples_leaf": 5,
+        "l2_regularization": 0.0
+      },
+      "metrics": {
+        "mae": 29.629975813083142,
+        "rmse": 39.26875022851181
+      }
+    },
+    {
+      "params": {
+        "learning_rate": 0.03,
+        "max_depth": 8,
+        "max_iter": 800,
+        "min_samples_leaf": 3,
+        "l2_regularization": 0.0
+      },
+      "metrics": {
+        "mae": 26.23030399297986,
+        "rmse": 37.115751558341984
+      }
+    },
+    {
+      "params": {
+        "learning_rate": 0.03,
+        "max_depth": 6,
+        "max_iter": 1000,
+        "min_samples_leaf": 10,
+        "l2_regularization": 0.1
+      },
+      "metrics": {
+        "mae": 27.99005614365369,
+        "rmse": 32.57784048139814
+      }
+    }
+  ],
+  "metrics": {
+    "mae": 11.285697577051195,
+    "rmse": 12.401228241014353
+  },
+  "classifier_metrics": {
+    "accuracy": 0.75,
+    "precision": 0.5,
+    "recall": 1.0
+  },
+  "n_beneficial_train": 16,
+  "n_beneficial_test": 2
+}

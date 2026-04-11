@@ -4,10 +4,25 @@ import numpy as np
 import pandas as pd
 from sklearn.model_selection import GroupShuffleSplit, train_test_split
 
-INPUT_CSV = os.environ.get("DATASET_INPUT_CSV", "prepared.csv")
-OUT_DIR = os.environ.get("DATASET_OUT_DIR", "dataset_reg")
+from leakage_audit import audit_target_matrix, summarize_audit
+
+INPUT_CSV = os.environ.get("DATASET_INPUT_CSV", "prepared_known_full_plusfb.csv")
+OUT_DIR = os.environ.get("DATASET_OUT_DIR", "dataset_reg_known_full_plusfb")
 WORKLOAD_COL = "workload"
 GROUP_COL = WORKLOAD_COL
+
+# Latency leakage: these columns either directly reconstruct the per-window
+# target duration or are derived from full-run timing counters that are not a
+# fair input for latency prediction.
+LATENCY_EXCLUDED_FEATURES = [
+    "service_time_ms",
+    "throughput_ops_per_s",
+    "elapsed_seconds",
+    "iterations_completed",
+    "window_start_ms",
+    "window_end_ms",
+    "progress_ratio",
+]
 
 # Features expected in the CSV
 BASE_FEATURES = [
@@ -171,10 +186,15 @@ def main():
         dummies = dummies.reindex(sorted(dummies.columns), axis=1)
         feature_df = pd.concat([feature_df, dummies], axis=1)
 
-    FEATURES = feature_df.columns.tolist()
+    ENERGY_FEATURES = feature_df.columns.tolist()
+    latency_feature_df = feature_df.drop(
+        columns=[col for col in LATENCY_EXCLUDED_FEATURES if col in feature_df.columns]
+    ).copy()
+    LATENCY_FEATURES = latency_feature_df.columns.tolist()
 
     # Split Data
-    X = feature_df.astype(float).values
+    X_energy = feature_df.astype(float).values
+    X_latency = latency_feature_df.astype(float).values
     y_latency = df[TARGET_LATENCY].astype(float).values
     y_energy = df[TARGET_ENERGY].astype(float).values
     groups = df[GROUP_COL].astype(str).values
@@ -184,19 +204,25 @@ def main():
 
     if len(unique_groups) >= 2:
         splitter = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
-        train_idx, test_idx = next(splitter.split(X, y_latency, groups))
+        train_idx, test_idx = next(splitter.split(X_energy, y_latency, groups))
     else:
         # Fallback if only 1 run_id exists
         print("Warning: Only 1 Group/Run ID found. Using random split instead of group split.")
         train_idx, test_idx = train_test_split(idx, test_size=0.2, random_state=42)
 
-    X_train, X_test = X[train_idx], X[test_idx]
+    X_energy_train, X_energy_test = X_energy[train_idx], X_energy[test_idx]
+    X_latency_train, X_latency_test = X_latency[train_idx], X_latency[test_idx]
     yL_train, yL_test = y_latency[train_idx], y_latency[test_idx]
     yE_train, yE_test = y_energy[train_idx], y_energy[test_idx]
 
     os.makedirs(OUT_DIR, exist_ok=True)
-    np.save(os.path.join(OUT_DIR, "X_train.npy"), X_train)
-    np.save(os.path.join(OUT_DIR, "X_test.npy"), X_test)
+    # Backward compatibility: keep X_train/X_test as the energy feature matrix.
+    np.save(os.path.join(OUT_DIR, "X_train.npy"), X_energy_train)
+    np.save(os.path.join(OUT_DIR, "X_test.npy"), X_energy_test)
+    np.save(os.path.join(OUT_DIR, "X_energy_train.npy"), X_energy_train)
+    np.save(os.path.join(OUT_DIR, "X_energy_test.npy"), X_energy_test)
+    np.save(os.path.join(OUT_DIR, "X_latency_train.npy"), X_latency_train)
+    np.save(os.path.join(OUT_DIR, "X_latency_test.npy"), X_latency_test)
     np.save(os.path.join(OUT_DIR, "y_latency_train.npy"), yL_train)
     np.save(os.path.join(OUT_DIR, "y_latency_test.npy"), yL_test)
     np.save(os.path.join(OUT_DIR, "y_energy_train.npy"), yE_train)
@@ -204,13 +230,46 @@ def main():
 
     # Save Meta
     meta = {
-        "features": FEATURES,
+        "features": ENERGY_FEATURES,
+        "features_energy": ENERGY_FEATURES,
+        "features_latency": LATENCY_FEATURES,
+        "latency_excluded_features": [col for col in LATENCY_EXCLUDED_FEATURES if col in ENERGY_FEATURES],
         "n_train": int(len(train_idx)),
         "n_test": int(len(test_idx)),
         "workload_onehot": []
     }
     with open(os.path.join(OUT_DIR, "meta.json"), "w") as f:
         json.dump(meta, f, indent=2)
+
+    leakage_report = {
+        "latency_model_features": audit_target_matrix(
+            X_latency,
+            y_latency,
+            LATENCY_FEATURES,
+            target_name="duration_ms",
+            run_pairwise=True,
+        ),
+        "latency_full_feature_set": audit_target_matrix(
+            X_energy,
+            y_latency,
+            ENERGY_FEATURES,
+            target_name="duration_ms_full_feature_set",
+            run_pairwise=True,
+        ),
+        "energy_model_features": audit_target_matrix(
+            X_energy,
+            y_energy,
+            ENERGY_FEATURES,
+            target_name="energy_joules",
+            run_pairwise=False,
+        ),
+    }
+    with open(os.path.join(OUT_DIR, "leakage_audit.json"), "w") as f:
+        json.dump(leakage_report, f, indent=2)
+
+    print("\n" + summarize_audit("Latency model feature set", leakage_report["latency_model_features"]))
+    print(summarize_audit("Latency full feature set", leakage_report["latency_full_feature_set"]))
+    print(summarize_audit("Energy model feature set", leakage_report["energy_model_features"]))
 
     print(f"\n[OK] Dataset built. Train size: {len(train_idx)}, Test size: {len(test_idx)}")
 

@@ -6,6 +6,17 @@ import numpy as np
 import joblib
 import matplotlib.pyplot as plt
 
+from plot_style import (
+    PAPER_DPI,
+    apply_paper_style,
+    finalize_figure,
+    make_figure,
+    maybe_show,
+    prompt_filename,
+    prompt_yes_no,
+    style_axes,
+)
+
 from resource_decision_features import (
     aggregate_repeated_measurements,
     aggregate_policy_rows,
@@ -15,15 +26,7 @@ from resource_decision_features import (
     project_baseline_rows_to_memory,
 )
 
-plt.rcParams.update({
-    "font.family": "serif",
-    "font.size": 18,
-    "axes.titlesize": 20,
-    "axes.labelsize": 20,
-    "xtick.labelsize": 18,
-    "ytick.labelsize": 18,
-    "legend.fontsize": 18,
-})
+apply_paper_style()
 
 
 def parse_int_list_env(name, default_values):
@@ -32,18 +35,18 @@ def parse_int_list_env(name, default_values):
         return default_values
     return [int(item.strip()) for item in raw.split(",") if item.strip()]
 
-DATA_FILE = os.environ.get("EVAL_KNOWN_CSV", "prepared.csv")
+DATA_FILE = os.environ.get("EVAL_KNOWN_CSV", "prepared_known_full_plusfb.csv")
 POLICY_FILE = os.environ.get("EVAL_KNOWN_POLICY_FILE", DATA_FILE)
-ACTUAL_FILE = os.environ.get("EVAL_KNOWN_ACTUAL_FILE", "")
-MODEL_FILE = os.environ.get("EVAL_MODEL_FILE", "models/energy_hgbdt_decision.joblib")
-MODEL_META_FILE = os.environ.get("EVAL_MODEL_META_FILE", "models/energy_hgbdt_decision_meta.json")
-MEMORY_OPTIONS = parse_int_list_env("SEBS_MEMORY_SIZES", [128, 256, 384, 512, 768, 1024])
+ACTUAL_FILE = os.environ.get("EVAL_KNOWN_ACTUAL_FILE", "raw_known_full_plusfb.jsonl")
+MODEL_FILE = os.environ.get("EVAL_MODEL_FILE", "models_known_full_plusfb_slo14/energy_hgbdt_decision.joblib")
+MODEL_META_FILE = os.environ.get("EVAL_MODEL_META_FILE", "models_known_full_plusfb_slo14/energy_hgbdt_decision_meta.json")
+MEMORY_OPTIONS = parse_int_list_env("SEBS_MEMORY_SIZES", [512, 1024])
 CPU_OPTIONS = [
     float(item.strip())
-    for item in os.environ.get("SEBS_CPU_LIMITS", "1.0").split(",")
+    for item in os.environ.get("SEBS_CPU_LIMITS", "0.75,1.0").split(",")
     if item.strip()
 ]
-SLO_MULTIPLIER = float(os.environ.get("SEBS_SLO_MULTIPLIER", "1.30"))
+SLO_MULTIPLIER_ENV = os.environ.get("SEBS_SLO_MULTIPLIER")
 CURRENT_MEM_MB = int(os.environ.get("SEBS_POLICY_CURRENT_MEM_MB", "1024"))
 CURRENT_CPU_LIMIT = float(os.environ.get("SEBS_POLICY_CURRENT_CPU_LIMIT", "1.0"))
 SWITCH_MARGIN_J = float(os.environ.get("SEBS_POLICY_SWITCH_MARGIN_J", "0.01"))
@@ -59,6 +62,12 @@ CLASSIFIER_FILE = os.environ.get(
 def load_model_meta():
     with open(MODEL_META_FILE, "r") as f:
         return json.load(f)
+
+
+def resolve_slo_multiplier(model_meta):
+    if SLO_MULTIPLIER_ENV is not None and str(SLO_MULTIPLIER_ENV).strip():
+        return float(SLO_MULTIPLIER_ENV)
+    return float(model_meta.get("decision_slo_multiplier", 1.30))
 
 
 def load_dataframe_auto(path):
@@ -79,7 +88,7 @@ def build_feature_matrix(df, feature_names, workload_type_map):
     return feature_df.to_numpy(dtype=float)
 
 
-def choose_hgbdt_action(model, classifier, feature_names, workload_type_map, model_meta, workload_df):
+def choose_hgbdt_action(model, classifier, feature_names, workload_type_map, model_meta, workload_df, slo_multiplier):
     workload_df = aggregate_repeated_measurements(workload_df, agg_mode=REPEAT_AGG_MODE)
     candidate_scores = {}
     baseline_rows = workload_df[
@@ -116,7 +125,7 @@ def choose_hgbdt_action(model, classifier, feature_names, workload_type_map, mod
             safety_penalty = compute_resource_safety_penalty(
                 candidate_runs,
                 slo_reference_ms=baseline_service_time_ms,
-                slo_multiplier=SLO_MULTIPLIER,
+                slo_multiplier=slo_multiplier,
                 current_mem_mb=CURRENT_MEM_MB,
             )
             beneficial_proba = 1.0
@@ -144,7 +153,7 @@ def choose_hgbdt_action(model, classifier, feature_names, workload_type_map, mod
         baseline_penalty = compute_resource_safety_penalty(
             baseline_rows,
             slo_reference_ms=baseline_service_time_ms,
-            slo_multiplier=SLO_MULTIPLIER,
+            slo_multiplier=slo_multiplier,
             current_mem_mb=CURRENT_MEM_MB,
         )
         candidate_scores[baseline_key] = {
@@ -191,6 +200,7 @@ model_meta = load_model_meta()
 feature_names = model_meta["features"]
 workload_type_map = model_meta["workload_type_map"]
 classifier = joblib.load(CLASSIFIER_FILE) if os.path.exists(CLASSIFIER_FILE) else None
+slo_multiplier = resolve_slo_multiplier(model_meta)
 
 # 2. Define the Candidates
 workloads = sorted(policy_df['workload'].unique())
@@ -225,7 +235,15 @@ for wl in workloads:
 
     # Use the trained HGBDT model to choose the memory size,
     # then evaluate the choice with the real measured energy.
-    optimal_mem, optimal_cpu, _ = choose_hgbdt_action(model, classifier, feature_names, workload_type_map, model_meta, workload_df)
+    optimal_mem, optimal_cpu, _ = choose_hgbdt_action(
+        model,
+        classifier,
+        feature_names,
+        workload_type_map,
+        model_meta,
+        workload_df,
+        slo_multiplier,
+    )
     if optimal_mem is None:
         continue
 
@@ -282,14 +300,22 @@ print("="*40)
 # 5. Plot
 labels = ["Default (1024MB)", "HgBDT-Optimized"]
 values = [total_energy_default, total_energy_hgbdt]
-fig, ax = plt.subplots(figsize=(6, 5))
-bars = ax.bar(labels, values, color=["gray", "#2ecc71"], edgecolor="black")
+fig, ax = make_figure()
+x = np.arange(len(labels))
+bars = ax.bar(x, values, color=["gray", "#2ecc71"], edgecolor="black")
 
-ax.set_ylabel("Total Energy (Joules)", fontsize=21, labelpad=8)
-ax.set_title(f"Real-World Power Savings\n(-{percent_savings:.1f}% with HgBDT)", fontsize=22, pad=12)
-ax.tick_params(axis="x", labelsize=18)
-ax.tick_params(axis="y", labelsize=18)
+ax.set_xticks(x)
+ax.set_xticklabels(["Default\n(1024MB / 1.0CPU)", "HgBDT\nChoice"])
+style_axes(
+    ax,
+    title=f"Real-World Energy Comparison ({percent_savings:.1f}% Savings)",
+    xlabel="Policy",
+    ylabel="Total Energy (Joules)",
+    title_width=30,
+    title_pad=10,
+)
 ax.grid(axis="y", alpha=0.3)
+ax.set_ylim(0, max(values) * 1.18)
 
 for bar in bars:
     height = bar.get_height()
@@ -299,19 +325,17 @@ for bar in bars:
         f"{height:.2f} J",
         ha="center",
         va="bottom",
-        fontsize=17,
+        fontsize=15,
         fontweight="bold",
     )
 
-plt.tight_layout()
-plt.show()
+finalize_figure(fig, top=0.95)
+maybe_show()
 
-save_plot = input("Do you want to save the plot? (y/n): ").strip().lower()
+save_plot = prompt_yes_no("Do you want to save the plot? (y/n): ", default="n")
 if save_plot == "y":
-    filename = input("Enter filename [fig_real_savings.png]: ").strip()
-    if not filename:
-        filename = "fig_real_savings.png"
-    fig.savefig(filename, dpi=300, bbox_inches="tight")
+    filename = prompt_filename("Enter filename", "fig_real_savings.png")
+    fig.savefig(filename, dpi=PAPER_DPI, bbox_inches="tight")
     print(f"[OK] Saved plot: {filename}")
 else:
     print("Plot not saved.")

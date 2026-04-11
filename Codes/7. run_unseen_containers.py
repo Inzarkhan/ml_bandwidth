@@ -2,27 +2,31 @@ import json
 import random
 import time
 import os
+import subprocess
 
 from sebs_container_runner import run_instrumented_container, validate_energy_access
 
 # Path to workloads
 HOST_WORKLOAD_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../serverless-exp/workloads"))
 HOST_SEBS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "serverless-benchmarks"))
-IMAGE_NAME = "serverless-runner:ubuntu22" 
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+IMAGE_NAME = os.environ.get("SEBS_RUNNER_IMAGE", "serverless-runner:ubuntu22")
+TORCH_IMAGE_NAME = os.environ.get("SEBS_TORCH_RUNNER_IMAGE", "serverless-runner:ubuntu22-torch")
+TORCH_DOCKERFILE = os.path.abspath(os.path.join(os.path.dirname(__file__), "Dockerfile.serverless-runner-torch"))
 OUTPUT_FILE = os.environ.get(
     "SEBS_UNSEEN_OUTPUT",
     os.environ.get(
         "BENCH_UNSEEN_OUTPUT",
-        "/home/said/Pictures/Paper_Conference/Paper_Micro/Codes/raw_sebs_unseen.jsonl",
+        "/home/said/Pictures/Paper_Conference/Paper_Micro/Codes/raw_functionbench_download_upload_unseen.jsonl",
     ),
 )
 WINDOWS_OUTPUT = os.environ.get(
     "SEBS_UNSEEN_WINDOWS_OUTPUT",
-    "/home/said/Pictures/Paper_Conference/Paper_Micro/Codes/raw_sebs_unseen_windows.jsonl",
+    "/home/said/Pictures/Paper_Conference/Paper_Micro/Codes/raw_functionbench_download_upload_unseen_windows.jsonl",
 )
-MEMORY_SIZES = [128, 256, 384, 512, 768, 1024]
-# Default to the longer steady-state run length used for analysis.
-TARGET_SECONDS = 120
+MEMORY_SIZES = [512, 1024]
+# Default to the validated 30s steady-state run length used in the final pipeline.
+TARGET_SECONDS = 30
 WORKLOAD_SPECS = {
     "sebs_compression_unseen": {
         "script": "sebs_compression_unseen.py",
@@ -31,14 +35,6 @@ WORKLOAD_SPECS = {
         "workload_type": "utility",
         "partition": "unseen",
         "benchmark_name": "compression",
-    },
-    "sebs_graph_pagerank_unseen": {
-        "script": "sebs_graph_pagerank_unseen.py",
-        "display_name": "Scientific (graph-pagerank)",
-        "suite": "SeBS",
-        "workload_type": "scientific",
-        "partition": "unseen",
-        "benchmark_name": "graph-pagerank",
     },
     "sebs_graph_mst_unseen": {
         "script": "sebs_graph_mst_unseen.py",
@@ -72,15 +68,23 @@ WORKLOAD_SPECS = {
         "partition": "unseen",
         "benchmark_name": "dna-visualisation",
     },
+    "functionbench_download_upload_unseen": {
+        "script": "functionbench_download_upload_unseen.py",
+        "display_name": "FunctionBench (download-upload)",
+        "suite": "FunctionBench",
+        "workload_type": "web",
+        "partition": "unseen",
+        "benchmark_name": "download-upload",
+    },
 }
 
 RESOURCE_PROFILE_MAP = {
     "sebs_compression_unseen": ("cpu", 1),
     "sebs_video_processing_unseen": ("cpu", 2),
-    "sebs_graph_pagerank_unseen": ("memory", 1),
     "sebs_graph_mst_unseen": ("memory", 3),
     "sebs_uploader_unseen": ("mixed", 5),
     "sebs_dna_visualisation_unseen": ("mixed", 6),
+    "functionbench_download_upload_unseen": ("mixed", 7),
 }
 
 RESOURCE_PROFILE_PREFIX = {
@@ -99,13 +103,10 @@ for workload_key, (resource_profile, resource_profile_index) in RESOURCE_PROFILE
     spec["plot_workload_name"] = f"{spec['benchmark_name']}_{resource_profile_label}"
 
 NEW_WORKLOADS = [
-    "sebs_graph_mst_unseen",
-    "sebs_uploader_unseen",
-    "sebs_video_processing_unseen",
-    "sebs_dna_visualisation_unseen",
+    "functionbench_download_upload_unseen",
 ]
 ITERATIONS = 1
-CPU_LIMITS = [1.0]
+CPU_LIMITS = [0.75, 1.0]
 SAMPLE_INTERVAL_MS = 250
 TARGET_ITERATIONS = 0
 RANDOMIZE_MEMORY_ORDER = True
@@ -172,10 +173,13 @@ def configured_memory_sizes():
 
 
 def ordered_configurations(workload, run_index):
+    spec = WORKLOAD_SPECS[workload]
+    min_mem_mb = int(spec.get("min_mem_mb", 0) or 0)
     base_configs = [
         (mem_mb, float(cpu_limit))
         for cpu_limit in parse_float_list_env(["SEBS_CPU_LIMITS"], CPU_LIMITS)
         for mem_mb in configured_memory_sizes()
+        if mem_mb >= min_mem_mb
     ]
     randomize = parse_bool_env(["SEBS_RANDOMIZE_MEMORY_ORDER"], RANDOMIZE_MEMORY_ORDER)
     if not randomize:
@@ -199,6 +203,33 @@ def append_jsonl(path, row):
         f.write(json.dumps(row) + "\n")
         f.flush()
 
+
+def docker_image_exists(image_name):
+    result = subprocess.run(
+        ["docker", "image", "inspect", image_name],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result.returncode == 0
+
+
+def validate_required_images(selected_workloads):
+    required_images = {
+        WORKLOAD_SPECS[workload].get("image_name", IMAGE_NAME)
+        for workload in selected_workloads
+    }
+    missing_images = sorted(image_name for image_name in required_images if not docker_image_exists(image_name))
+    if not missing_images:
+        return True
+
+    print(f"Error: Missing runner image(s): {', '.join(missing_images)}")
+    if TORCH_IMAGE_NAME in missing_images:
+        print("Build the torch-enabled runner image with:")
+        print(f"  docker build -f '{TORCH_DOCKERFILE}' -t {TORCH_IMAGE_NAME} '{PROJECT_ROOT}'")
+    return False
+
+
 def run_container(workload, mem_mb, cpu_limit, target_seconds, run_index=1, idle_gap_ms=0.0, target_iterations=None):
     spec = WORKLOAD_SPECS[workload]
     return run_instrumented_container(
@@ -207,7 +238,7 @@ def run_container(workload, mem_mb, cpu_limit, target_seconds, run_index=1, idle
         spec=spec,
         mem_mb=mem_mb,
         target_seconds=target_seconds,
-        image_name=IMAGE_NAME,
+        image_name=spec.get("image_name", IMAGE_NAME),
         host_workload_dir=HOST_WORKLOAD_DIR,
         host_sebs_dir=HOST_SEBS_DIR,
         cpu_limit=cpu_limit,
@@ -232,6 +263,8 @@ def main():
     invalid = [wl for wl in selected_workloads if wl not in WORKLOAD_SPECS]
     if invalid:
         print(f"Error: Unknown unseen workloads requested: {invalid}")
+        return
+    if not validate_required_images(selected_workloads):
         return
 
     if target_iterations is not None:
@@ -273,6 +306,12 @@ def main():
             if budget_exhausted:
                 break
             config_order = ordered_configurations(wl, i + 1)
+            if not config_order:
+                print(
+                    f"\n[Skip] No valid configurations for {spec['display_name']} "
+                    f"under the current memory tiers."
+                )
+                continue
             print(
                 f"\nConfiguration order for {spec['display_name']} (run {i+1}): "
                 f"{[(mem, cpu) for mem, cpu in config_order]}"

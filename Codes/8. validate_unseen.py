@@ -7,6 +7,18 @@ import numpy as np
 import joblib
 from matplotlib.patches import Patch
 
+from plot_style import (
+    PAPER_DPI,
+    apply_paper_style,
+    finalize_figure,
+    make_figure,
+    maybe_show,
+    prompt_filename,
+    prompt_yes_no,
+    style_axes,
+    wrap_label,
+)
+
 from resource_decision_features import (
     aggregate_repeated_measurements,
     aggregate_policy_rows,
@@ -24,32 +36,37 @@ def parse_int_list_env(name, default_values):
     return [int(item.strip()) for item in raw.split(",") if item.strip()]
 
 # CONFIGURATION
-INPUT_FILE = os.environ.get("EVAL_UNSEEN_INPUT", "raw_sebs_unseen.jsonl")
-POLICY_FILE = os.environ.get("EVAL_UNSEEN_POLICY_INPUT", INPUT_FILE)
+INPUT_FILE = os.environ.get("EVAL_UNSEEN_INPUT", "raw_functionbench_download_upload_unseen.jsonl")
+POLICY_FILE = os.environ.get(
+    "EVAL_UNSEEN_POLICY_INPUT",
+    "prepared_functionbench_download_upload_unseen_after_plusfb.csv",
+)
 ACTUAL_FILE = os.environ.get("EVAL_UNSEEN_ACTUAL_INPUT", INPUT_FILE)
-MODEL_FILE = os.environ.get("EVAL_MODEL_FILE", "models/energy_hgbdt_decision.joblib")
-MODEL_META_FILE = os.environ.get("EVAL_MODEL_META_FILE", "models/energy_hgbdt_decision_meta.json")
+MODEL_FILE = os.environ.get("EVAL_MODEL_FILE", "models_known_full_plusfb_slo14/energy_hgbdt_decision.joblib")
+MODEL_META_FILE = os.environ.get("EVAL_MODEL_META_FILE", "models_known_full_plusfb_slo14/energy_hgbdt_decision_meta.json")
 DEFAULT_MEM = 1024
 DEFAULT_CPU = float(os.environ.get("SEBS_POLICY_CURRENT_CPU_LIMIT", "1.0"))
 COLD_START_DEFAULT = 0
-SLO_MULTIPLIER = float(os.environ.get("SEBS_SLO_MULTIPLIER", "1.30"))
+SLO_MULTIPLIER_ENV = os.environ.get("SEBS_SLO_MULTIPLIER")
 UNSEEN_WORKLOAD_TYPE_MAP = {
     "sebs_graph_mst_unseen": "scientific",
     "sebs_uploader_unseen": "web",
     "sebs_video_processing_unseen": "multimedia",
     "sebs_dna_visualisation_unseen": "scientific",
+    "functionbench_download_upload_unseen": "web",
 }
 WORKLOAD_LABELS = {
     "sebs_graph_mst_unseen": "Scientific (graph-mst)",
     "sebs_uploader_unseen": "Web (uploader)",
     "sebs_video_processing_unseen": "Multimedia (video-processing)",
     "sebs_dna_visualisation_unseen": "Scientific (dna-visualisation)",
+    "functionbench_download_upload_unseen": "FunctionBench (download-upload)",
 }
-MEMORY_OPTIONS = parse_int_list_env("SEBS_MEMORY_SIZES", [128, 256, 384, 512, 768, 1024])
+MEMORY_OPTIONS = parse_int_list_env("SEBS_MEMORY_SIZES", [512, 1024])
 CURRENT_MEM_MB = int(os.environ.get("SEBS_POLICY_CURRENT_MEM_MB", "1024"))
 CPU_OPTIONS = [
     float(item.strip())
-    for item in os.environ.get("SEBS_CPU_LIMITS", "1.0").split(",")
+    for item in os.environ.get("SEBS_CPU_LIMITS", "0.75,1.0").split(",")
     if item.strip()
 ]
 SWITCH_MARGIN_J = float(os.environ.get("SEBS_POLICY_SWITCH_MARGIN_J", "0.01"))
@@ -82,6 +99,12 @@ def load_model_meta():
         return json.load(f)
 
 
+def resolve_slo_multiplier(model_meta):
+    if SLO_MULTIPLIER_ENV is not None and str(SLO_MULTIPLIER_ENV).strip():
+        return float(SLO_MULTIPLIER_ENV)
+    return float(model_meta.get("decision_slo_multiplier", 1.30))
+
+
 def load_dataframe_auto(path):
     if path.lower().endswith(".csv"):
         return pd.read_csv(path)
@@ -103,7 +126,7 @@ def build_feature_matrix(df, feature_names, workload_type_map):
     return feature_df.to_numpy(dtype=float)
 
 
-def choose_hgbdt_action(model, classifier, feature_names, workload_type_map, model_meta, workload_df):
+def choose_hgbdt_action(model, classifier, feature_names, workload_type_map, model_meta, workload_df, slo_multiplier):
     workload_df = aggregate_repeated_measurements(workload_df, agg_mode=REPEAT_AGG_MODE)
     candidate_scores = {}
     baseline_rows = workload_df[
@@ -140,7 +163,7 @@ def choose_hgbdt_action(model, classifier, feature_names, workload_type_map, mod
             safety_penalty = compute_resource_safety_penalty(
                 candidate_runs,
                 slo_reference_ms=baseline_service_time_ms,
-                slo_multiplier=SLO_MULTIPLIER,
+                slo_multiplier=slo_multiplier,
                 current_mem_mb=CURRENT_MEM_MB,
             )
             beneficial_proba = 1.0
@@ -168,7 +191,7 @@ def choose_hgbdt_action(model, classifier, feature_names, workload_type_map, mod
         baseline_penalty = compute_resource_safety_penalty(
             baseline_rows,
             slo_reference_ms=baseline_service_time_ms,
-            slo_multiplier=SLO_MULTIPLIER,
+            slo_multiplier=slo_multiplier,
             current_mem_mb=CURRENT_MEM_MB,
         )
         candidate_scores[baseline_key] = {
@@ -204,15 +227,7 @@ def choose_hgbdt_action(model, classifier, feature_names, workload_type_map, mod
 
 
 def main():
-    plt.rcParams.update({
-        "font.family": "serif",
-        "font.size": 18,
-        "axes.titlesize": 20,
-        "axes.labelsize": 20,
-        "xtick.labelsize": 18,
-        "ytick.labelsize": 18,
-        "legend.fontsize": 18,
-    })
+    apply_paper_style()
 
     try:
         policy_df = load_dataframe_auto(POLICY_FILE)
@@ -225,6 +240,7 @@ def main():
         model = joblib.load(MODEL_FILE)
         model_meta = load_model_meta()
         feature_names = model_meta["features"]
+        slo_multiplier = resolve_slo_multiplier(model_meta)
         workload_type_map = {
             **model_meta.get("workload_type_map", {}),
             **UNSEEN_WORKLOAD_TYPE_MAP,
@@ -266,7 +282,15 @@ def main():
             continue
         def_energy = def_row["energy_joules"].values[0]
 
-        choice_mem, choice_cpu, _ = choose_hgbdt_action(model, classifier, feature_names, workload_type_map, model_meta, workload_df)
+        choice_mem, choice_cpu, _ = choose_hgbdt_action(
+            model,
+            classifier,
+            feature_names,
+            workload_type_map,
+            model_meta,
+            workload_df,
+            slo_multiplier,
+        )
         if choice_mem is None:
             continue
 
@@ -306,7 +330,7 @@ def main():
     x = np.arange(len(results["workload"]))
     width = 0.34
 
-    fig, ax = plt.subplots(figsize=(9.5, 6.5))
+    fig, ax = make_figure()
 
     rects1 = ax.bar(
         x - width / 2,
@@ -330,19 +354,27 @@ def main():
         label="HgBDT Choice"
     )
 
-    ax.set_title("Unseen Energy Comparison", fontsize=22, pad=12)
-    ax.set_ylabel("Energy (Joules)", fontsize=21, labelpad=8)
-    ax.set_xlabel("Workload", fontsize=21, labelpad=8)
+    style_axes(
+        ax,
+        title="Unseen Energy Comparison",
+        xlabel="Workload",
+        ylabel="Energy (Joules)",
+        title_width=28,
+        title_pad=10,
+    )
 
     ax.set_xticks(x)
-    ax.set_xticklabels(plot_labels, rotation=12, ha="right")
+    wrapped_labels = [wrap_label(label, width=18) for label in plot_labels]
+    rotation = 10 if len(wrapped_labels) > 1 else 0
+    alignment = "right" if len(wrapped_labels) > 1 else "center"
+    ax.set_xticklabels(wrapped_labels, rotation=rotation, ha=alignment)
     max_value = max(results["Default"] + results["HgBDT"])
-    ax.set_ylim(0, max_value * 1.15)
+    ax.set_ylim(0, max_value * 1.20)
 
     ax.grid(False)
 
-    add_bar_labels(ax, rects1, fontsize=17)
-    add_bar_labels(ax, rects2, fontsize=17)
+    add_bar_labels(ax, rects1, fontsize=15)
+    add_bar_labels(ax, rects2, fontsize=15)
 
     legend_handles = [
         Patch(facecolor="#7F7F7F", edgecolor="black", hatch="///", label="Default (1024MB)"),
@@ -350,21 +382,20 @@ def main():
     ]
     ax.legend(
         handles=legend_handles,
-        fontsize=18,
+        fontsize=14,
         frameon=True,
-        loc="upper right",
-        bbox_to_anchor=(0.98, 0.90),
+        loc="upper center",
+        bbox_to_anchor=(0.5, 1.01),
+        ncol=2,
     )
 
-    plt.tight_layout()
-    plt.show()
+    finalize_figure(fig, top=0.90)
+    maybe_show()
 
-    save_plot = input("Do you want to save the plot? (y/n): ").strip().lower()
+    save_plot = prompt_yes_no("Do you want to save the plot? (y/n): ", default="n")
     if save_plot == "y":
-        filename = input("Enter filename [fig_heavy_generalization.png]: ").strip()
-        if not filename:
-            filename = "fig_heavy_generalization.png"
-        fig.savefig(filename, dpi=300, bbox_inches="tight")
+        filename = prompt_filename("Enter filename", "fig_heavy_generalization.png")
+        fig.savefig(filename, dpi=PAPER_DPI, bbox_inches="tight")
         print(f"[OK] Saved plot: {filename}")
     else:
         print("Plot not saved.")

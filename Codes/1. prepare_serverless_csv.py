@@ -8,10 +8,15 @@ from pathlib import Path
 # USER SETTINGS (EDIT HERE)
 # ----------------------------
 
-# Option A: Process the known benchmark files used for training
+# Option A: Process the final combined known benchmark windows used for training
 INPUT_FILES = [
-    "raw_sebs_known.jsonl",
+    "raw_known_full_plusfb_windows.jsonl",
 ]
+
+# Final unseen FunctionBench validation preset
+# INPUT_FILES = [
+#     "raw_functionbench_download_upload_unseen_windows.jsonl",
+# ]
 
 # Option B: Process multiple files (uncomment and list them)
 # INPUT_FILES = [
@@ -24,7 +29,7 @@ INPUT_FILES = [
 # INPUT_FOLDER = "raw_logs"
 # INPUT_FILES = None
 
-OUTPUT_CSV = "prepared.csv"
+OUTPUT_CSV = "prepared_known_full_plusfb.csv"
 
 # ----------------------------
 # Expected keys in each record

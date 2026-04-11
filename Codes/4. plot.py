@@ -5,22 +5,25 @@ import matplotlib.pyplot as plt
 import joblib
 from sklearn.inspection import permutation_importance
 
+from plot_style import (
+    PAPER_DPI,
+    apply_paper_style,
+    finalize_figure,
+    format_feature_label,
+    make_figure,
+    maybe_show,
+    prompt_filename,
+    prompt_yes_no,
+    style_axes,
+)
+
 # Settings
-MODEL_DIR = "models"
-DATA_DIR = "dataset_reg"
+MODEL_DIR = os.environ.get("PLOT_MODEL_DIR", "models_known_full_plusfb_slo14")
+DATA_DIR = os.environ.get("PLOT_DATASET_DIR", "dataset_reg_known_full_plusfb")
+TOP_FEATURES = int(os.environ.get("PLOT_TOP_FEATURES", "12"))
 
 def main():
-    # Global paper-style font settings
-    plt.rcParams.update({
-        "font.family": "serif",
-        "font.size": 18,
-        "axes.titlesize": 20,
-        "axes.labelsize": 20,
-        "xtick.labelsize": 18,
-        "ytick.labelsize": 18,
-        "legend.fontsize": 18,
-        "legend.title_fontsize": 18
-    })
+    apply_paper_style()
 
     # 1. Load Data
     print("Loading test data...")
@@ -41,7 +44,7 @@ def main():
     # -----------------------------
     # PLOT 1: PREDICTED VS ACTUAL
     # -----------------------------
-    fig1, ax1 = plt.subplots(figsize=(8.5, 7.0))
+    fig1, ax1 = make_figure()
 
     ax1.scatter(
         yE_test,
@@ -66,14 +69,18 @@ def main():
         label="Perfect Prediction"
     )
 
-    ax1.set_title(f"Energy Prediction Accuracy (R² = {r2:.3f})", fontsize=22, pad=12)
-    ax1.set_xlabel("Actual Energy (Joules)", fontsize=21, labelpad=8)
-    ax1.set_ylabel("Predicted Energy (Joules)", fontsize=21, labelpad=8)
-    ax1.tick_params(axis="both", labelsize=18)
-    ax1.legend(frameon=True, fontsize=18)
+    style_axes(
+        ax1,
+        title=f"Energy Prediction Accuracy (R² = {r2:.3f})",
+        xlabel="Actual Energy (Joules)",
+        ylabel="Predicted Energy (Joules)",
+        title_width=28,
+        title_pad=10,
+    )
+    ax1.legend(frameon=True)
     ax1.grid(False)
 
-    plt.tight_layout()
+    finalize_figure(fig1, top=0.96)
 
     # -----------------------------
     # PLOT 2: FEATURE IMPORTANCE
@@ -92,78 +99,51 @@ def main():
         n_jobs=-1
     )
 
-    sorted_idx = result.importances_mean.argsort()
+    mean_importance = result.importances_mean
+    std_importance = result.importances_std
+    top_idx = np.argsort(mean_importance)[-TOP_FEATURES:]
+    top_idx = top_idx[np.argsort(mean_importance[top_idx])]
+    top_features = [format_feature_label(name) for name in feature_names[top_idx]]
+    top_means = mean_importance[top_idx]
+    top_stds = std_importance[top_idx]
 
-    fig2, ax2 = plt.subplots(figsize=(16, 10))
+    fig2, ax2 = make_figure()
 
-    bp = ax2.boxplot(
-        result.importances[sorted_idx].T,
-        vert=False,
-        labels=feature_names[sorted_idx],
-        patch_artist=True,
-        widths=0.75
+    ax2.barh(
+        top_features,
+        top_means,
+        xerr=top_stds,
+        color="#4C72B0",
+        edgecolor="black",
+        linewidth=1.0,
+        capsize=4,
+        alpha=0.9
     )
 
-    for box in bp["boxes"]:
-        box.set(facecolor="#DDDDDD", edgecolor="black", linewidth=7.6)
-
-    for whisker in bp["whiskers"]:
-        whisker.set(color="black", linewidth=7.6)
-
-    for cap in bp["caps"]:
-        cap.set(color="black", linewidth=7.6)
-
-    for median in bp["medians"]:
-        median.set(color="#C44E52", linewidth=7.6)
-
-    for flier in bp["fliers"]:
-        flier.set(marker="o",
-                markerfacecolor="gray",
-                markeredgecolor="black",
-                alpha=0.6,
-                markersize=10)
-
-    ax2.set_title(
-        "Feature Importance for Energy Consumption",
-        fontsize=26,
-        pad=14
+    style_axes(
+        ax2,
+        title=f"Top {len(top_features)} Feature Importance for Energy Prediction",
+        xlabel="Permutation Importance",
+        ylabel="Features",
+        title_width=30,
+        title_pad=10,
     )
 
-    ax2.set_xlabel(
-        "Permutation Importance (Decrease in Accuracy)",
-        fontsize=24,
-        labelpad=10
-    )
-
-    ax2.set_ylabel(
-        "Features",
-        fontsize=24,
-        labelpad=12
-    )
-
-    ax2.tick_params(axis="x", labelsize=22)
-    ax2.tick_params(axis="y", labelsize=22)
-
+    ax2.tick_params(axis="y", pad=4)
     ax2.grid(False)
+    ax2.set_xlim(left=min(-0.02, float(top_means.min()) * 1.10))
 
-    plt.tight_layout(pad=2.0)
+    finalize_figure(fig2, top=0.95)
 
-    # Show both plots first
-    plt.show()
+    maybe_show()
 
-    # Ask whether to save
-    save_plots = input("Do you want to save the plots? (y/n): ").strip().lower()
+    save_plots = prompt_yes_no("Do you want to save the plots? (y/n): ", default="n")
     if save_plots == "y":
-        acc_file = input("Enter accuracy plot filename [fig_energy_accuracy.png]: ").strip()
-        imp_file = input("Enter importance plot filename [fig_feature_importance.png]: ").strip()
+        acc_file = prompt_filename("Enter accuracy plot filename", "fig_energy_accuracy.png")
+        imp_file = prompt_filename("Enter importance plot filename", "fig_feature_importance.png")
 
-        if not acc_file:
-            acc_file = "fig_energy_accuracy.png"
-        if not imp_file:
-            imp_file = "fig_feature_importance.png"
-
-        fig1.savefig(acc_file, dpi=300, bbox_inches="tight")
-        fig2.savefig(imp_file, dpi=300, bbox_inches="tight")
+        fig1.savefig(acc_file, dpi=PAPER_DPI, bbox_inches="tight")
+        fig2.savefig(imp_file, dpi=PAPER_DPI, bbox_inches="tight")
 
         print(f"[OK] Saved {acc_file}")
         print(f"[OK] Saved {imp_file}")

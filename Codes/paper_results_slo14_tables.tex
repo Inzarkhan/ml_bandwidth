@@ -1,0 +1,87 @@
+% LaTeX tables for the SeBS CPU+memory HGBDT experiment (`slo14`, `30s`)
+% Suggested packages:
+% \usepackage{booktabs}
+
+\begin{table}[t]
+\centering
+\caption{Decision-model training summary for the broader SeBS known set.}
+\label{tab:slo14-model-summary}
+\begin{tabular}{lr}
+\toprule
+Metric & Value \\
+\midrule
+Decision-time energy MAE & 41.70 \\
+Decision-time energy RMSE & 64.36 \\
+Classifier accuracy & 0.9167 \\
+Classifier precision & 0.80 \\
+Classifier recall & 1.00 \\
+Classifier F1 & 0.8889 \\
+Beneficial train labels & 11 \\
+Beneficial test labels & 4 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[t]
+\centering
+\caption{Energy-saving results under a $1.4\times$ latency SLO. Nominal rows are the direct evaluator outputs; strict rows revalidate the chosen actions against measured service times.}
+\label{tab:slo14-energy-results}
+\begin{tabular}{lrrrr}
+\toprule
+Split & Default (J) & Model (J) & Savings (J) & Savings (\%) \\
+\midrule
+Known, strict & 10311.78 & 9957.44 & 354.35 & 3.44 \\
+Unseen, nominal & 1182.89 & 967.89 & 215.00 & 18.18 \\
+Unseen, strict & 1182.89 & 1164.27 & 18.63 & 1.57 \\
+Alt unseen, nominal & 1630.45 & 1262.90 & 367.55 & 22.54 \\
+Alt unseen, strict & 1630.45 & 1630.45 & 0.00 & 0.00 \\
+Combined, strict & 11494.67 & 11121.71 & 372.98 & 3.24 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[t]
+\centering
+\caption{SLO-safe oracle comparison under a $1.4\times$ latency SLO.}
+\label{tab:slo14-oracle-comparison}
+\begin{tabular}{lrrr}
+\toprule
+Split & Oracle savings (J) & Oracle savings (\%) & Model capture (\%) \\
+\midrule
+Known, strict & 636.35 & 6.17 & 55.68 \\
+Unseen, strict & 33.93 & 2.87 & 54.93 \\
+Alt unseen, strict & 34.48 & 2.11 & 0.00 \\
+Combined, strict & 670.28 & 5.83 & 55.64 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[t]
+\centering
+\caption{Per-workload strict validation for the unseen trio.}
+\label{tab:slo14-unseen-workload-check}
+\begin{tabular}{lrrl}
+\toprule
+Workload & Chosen energy (J) & Service time (ms) & Strict result \\
+\midrule
+graph-pagerank\_mem1 & 207.51 & 16393.01 & unsafe, fallback to baseline \\
+image-recognition\_cpu3 & 241.95 & 2728.89 & safe \\
+thumbnailer\_mix3 & 518.43 & 41.32 & unsafe by $\sim$0.02 ms \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[t]
+\centering
+\caption{Alternative unseen-partition result using the same benchmark families as training (`graph-mst`, `uploader`, `video-processing`) but separate unseen runs.}
+\label{tab:slo14-alt-unseen-check}
+\begin{tabular}{lrrl}
+\toprule
+Workload & Chosen energy (J) & Service time (ms) & Strict result \\
+\midrule
+graph-mst\_mem3 & 458.10 & 316.75 & unsafe by $\sim$1.87 ms \\
+uploader\_mix5 & 472.81 & 134.36 & unsafe by $\sim$0.96 ms \\
+video-processing\_cpu2 & 331.99 & 470.36 & unsafe \\
+\bottomrule
+\end{tabular}
+\end{table}

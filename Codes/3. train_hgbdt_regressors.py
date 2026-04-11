@@ -8,10 +8,11 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error
 from sklearn.model_selection import GroupShuffleSplit, train_test_split
 
 from resource_decision_features import build_projected_decision_dataframe, build_resource_decision_feature_df, derive_service_time_ms
+from leakage_audit import summarize_audit
 
-DATA_DIR = os.environ.get("DATASET_DIR", "dataset_reg")
-MODEL_DIR = os.environ.get("MODEL_DIR", "models")
-PREPARED_FILE = os.environ.get("PREPARED_CSV", "prepared.csv")
+DATA_DIR = os.environ.get("DATASET_DIR", "dataset_reg_known_full_plusfb")
+MODEL_DIR = os.environ.get("MODEL_DIR", "models_known_full_plusfb_slo14")
+PREPARED_FILE = os.environ.get("PREPARED_CSV", "prepared_known_full_plusfb.csv")
 
 LOG_MIN = np.log1p(0.0)
 LOG_MAX = np.log1p(300000.0)  # allow up to 300s runs for 120-200s benchmarking
@@ -27,7 +28,7 @@ DECISION_TARGET = "energy_delta_vs_1024_joules"
 DECISION_BASELINE_MEM = 1024
 DECISION_BASELINE_CPU = float(os.environ.get("SEBS_DECISION_BASELINE_CPU_LIMIT", "1.0"))
 DECISION_REPEAT_AGG_MODE = os.environ.get("SEBS_DECISION_REPEAT_AGG_MODE", "median")
-DECISION_SLO_MULTIPLIER = float(os.environ.get("SEBS_DECISION_SLO_MULTIPLIER", "1.30"))
+DECISION_SLO_MULTIPLIER = float(os.environ.get("SEBS_DECISION_SLO_MULTIPLIER", "1.40"))
 DECISION_BENEFICIAL_MIN_SAVINGS_PCT = float(os.environ.get("SEBS_DECISION_MIN_SAVINGS_PCT", "0.50"))
 DECISION_BENEFICIAL_THRESHOLD = float(os.environ.get("SEBS_DECISION_CLASSIFIER_THRESHOLD", "0.60"))
 DECISION_PARAM_GRID = [
@@ -62,22 +63,21 @@ DECISION_PARAM_GRID = [
 ]
 
 WORKLOAD_TYPE_MAP = {
-    "sebs_sleep_known": "web",
     "sebs_dynamic_html_known": "web",
-    "sebs_thumbnailer_known": "multimedia",
     "sebs_graph_bfs_known": "scientific",
+    "sebs_graph_mst_known": "scientific",
     "sebs_compression_known": "utility",
-    "sebs_graph_pagerank_known": "scientific",
     "sebs_crud_api_known": "web",
     "sebs_uploader_known": "web",
     "sebs_video_processing_known": "multimedia",
     "sebs_dna_visualisation_known": "scientific",
+    "functionbench_download_upload_known": "web",
     "sebs_compression_unseen": "utility",
-    "sebs_graph_pagerank_unseen": "scientific",
     "sebs_graph_mst_unseen": "scientific",
     "sebs_uploader_unseen": "web",
     "sebs_video_processing_unseen": "multimedia",
     "sebs_dna_visualisation_unseen": "scientific",
+    "functionbench_download_upload_unseen": "web",
 }
 
 def rmse(y_true, y_pred):
@@ -357,8 +357,16 @@ def train_decision_time_energy_model():
 def main():
     os.makedirs(MODEL_DIR, exist_ok=True)
 
-    X_train = np.load(os.path.join(DATA_DIR, "X_train.npy"))
-    X_test  = np.load(os.path.join(DATA_DIR, "X_test.npy"))
+    def load_array(preferred_name, fallback_name):
+        preferred_path = os.path.join(DATA_DIR, preferred_name)
+        if os.path.exists(preferred_path):
+            return np.load(preferred_path)
+        return np.load(os.path.join(DATA_DIR, fallback_name))
+
+    X_energy_train = load_array("X_energy_train.npy", "X_train.npy")
+    X_energy_test = load_array("X_energy_test.npy", "X_test.npy")
+    X_latency_train = load_array("X_latency_train.npy", "X_train.npy")
+    X_latency_test = load_array("X_latency_test.npy", "X_test.npy")
     yL_train = np.load(os.path.join(DATA_DIR, "y_latency_train.npy"))
     yL_test  = np.load(os.path.join(DATA_DIR, "y_latency_test.npy"))
     yE_train = np.load(os.path.join(DATA_DIR, "y_energy_train.npy"))
@@ -366,24 +374,38 @@ def main():
 
     # We need cold_start column index from meta.json features
     meta = json.load(open(os.path.join(DATA_DIR, "meta.json")))
-    feats = meta["features"]
-    if "cold_start" not in feats:
-        raise ValueError("cold_start not found in features. Check dataset_reg/meta.json")
-    cold_i = feats.index("cold_start")
+    energy_feats = meta.get("features_energy", meta["features"])
+    latency_feats = meta.get("features_latency", meta["features"])
+    if "cold_start" not in latency_feats:
+        raise ValueError("cold_start not found in latency features. Check dataset_reg/meta.json")
+    cold_i = latency_feats.index("cold_start")
+
+    leakage_audit_path = os.path.join(DATA_DIR, "leakage_audit.json")
+    if os.path.exists(leakage_audit_path):
+        with open(leakage_audit_path, "r") as f:
+            leakage_report = json.load(f)
+        print("\n" + summarize_audit("Latency model feature set", leakage_report["latency_model_features"]))
+        print(summarize_audit("Latency full feature set", leakage_report["latency_full_feature_set"]))
+        print(summarize_audit("Energy model feature set", leakage_report["energy_model_features"]))
+        if leakage_report["latency_full_feature_set"]["has_critical_findings"]:
+            print(
+                "  Note: the generic full feature set contains latency leakage, "
+                "so latency training will use X_latency_* arrays only."
+            )
 
     # Masks
-    cold_train = X_train[:, cold_i] == 1
+    cold_train = X_latency_train[:, cold_i] == 1
     warm_train = ~cold_train
-    cold_test = X_test[:, cold_i] == 1
+    cold_test = X_latency_test[:, cold_i] == 1
     warm_test = ~cold_test
 
     # ---- Train latency model(s) ----
     if cold_train.any() and warm_train.any():
-        m_cold = fit_log_model(X_train[cold_train], yL_train[cold_train])
-        m_warm = fit_log_model(X_train[warm_train], yL_train[warm_train])
+        m_cold = fit_log_model(X_latency_train[cold_train], yL_train[cold_train])
+        m_warm = fit_log_model(X_latency_train[warm_train], yL_train[warm_train])
 
-        pred_cold = predict_ms(m_cold, X_test[cold_test]) if cold_test.any() else np.array([])
-        pred_warm = predict_ms(m_warm, X_test[warm_test]) if warm_test.any() else np.array([])
+        pred_cold = predict_ms(m_cold, X_latency_test[cold_test]) if cold_test.any() else np.array([])
+        pred_warm = predict_ms(m_warm, X_latency_test[warm_test]) if warm_test.any() else np.array([])
 
         y_pred_all = np.empty_like(yL_test, dtype=float)
         if cold_test.any():
@@ -393,10 +415,10 @@ def main():
     else:
         # Benchmark-only datasets can be all warm starts. Fall back to one
         # latency model rather than failing on an empty split.
-        fallback_model = fit_log_model(X_train, yL_train)
+        fallback_model = fit_log_model(X_latency_train, yL_train)
         m_cold = fallback_model
         m_warm = fallback_model
-        y_pred_all = predict_ms(fallback_model, X_test)
+        y_pred_all = predict_ms(fallback_model, X_latency_test)
 
     # Metrics
     overall = metrics(yL_test, y_pred_all)
@@ -411,8 +433,8 @@ def main():
         max_iter=400,
         random_state=42,
     )
-    energy_model.fit(X_train, yE_train)
-    yE_pred = energy_model.predict(X_test)
+    energy_model.fit(X_energy_train, yE_train)
+    yE_pred = energy_model.predict(X_energy_test)
     energy_m = metrics(yE_test, yE_pred)
 
     decision_energy_meta = train_decision_time_energy_model()
@@ -442,7 +464,9 @@ def main():
         "energy_decision_time_features": decision_energy_meta["features"],
         "latency_target": "log1p(duration_ms) with cold/warm split",
         "prediction_postprocess": f"clip log to [{float(LOG_MIN):.3f},{float(LOG_MAX):.3f}] then expm1",
-        "features": feats,
+        "features": energy_feats,
+        "features_energy": energy_feats,
+        "features_latency": latency_feats,
     }
     with open(os.path.join(MODEL_DIR, "metrics.json"), "w") as f:
         json.dump(out, f, indent=2)
